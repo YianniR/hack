@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Network Graph Visualizer</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        #graph {
+            width: 100%;
+            height: 90vh;
+            border: 1px solid #333;
+            border-radius: 8px;
+        }
+        .node {
+            cursor: pointer;
+        }
+        .node circle {
+            stroke: #fff;
+            stroke-width: 1.5px;
+        }
+        .node text {
+            font-size: 10px;
+            fill: #fff;
+        }
+        .link {
+            stroke: #666;
+            stroke-opacity: 0.3;
+        }
+        .controls {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+        }
+        .controls input {
+            margin: 5px 0;
+            width: 200px;
+        }
+        .tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            pointer-events: none;
+            display: none;
+        }
+        #error {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 8px;
+            display: none;
+        }
+        #debug {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .loading {
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px 20px;
+            border-radius: 4px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="graph"></div>
+    <div id="error"></div>
+    <div id="debug"></div>
+    <div class="controls">
+        <div>
+            <label>Link Distance:</label>
+            <input type="range" id="linkDistance" min="30" max="300" value="100">
+        </div>
+        <div>
+            <label>Charge Strength:</label>
+            <input type="range" id="charge" min="-1000" max="0" value="-300">
+        </div>
+        <div>
+            <label>Search Username:</label>
+            <input type="text" id="search" placeholder="Enter username...">
+        </div>
+        <div>
+            <label>Semantic Search:</label>
+            <input type="text" id="searchTerm" placeholder="Enter word or phrase...">
+        </div>
+        <div>
+            <label>Semantic Force Strength:</label>
+            <input type="range" id="semanticForce" min="0" max="100" value="50">
+        </div>
+    </div>
+    <div class="tooltip"></div>
+    <div class="loading">Processing semantic search...</div>
+
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script>
+        // Debug logging function
+        function log(message, data) {
+            const debug = document.getElementById('debug');
+            const time = new Date().toLocaleTimeString();
+            debug.innerHTML += `<div>[${time}] ${message}</div>`;
+            if (data) {
+                debug.innerHTML += `<div style="color: #888">${JSON.stringify(data)}</div>`;
+            }
+            debug.scrollTop = debug.scrollHeight;
+            console.log(message, data);
+        }
+
+        // Error display function
+        function showError(message) {
+            const error = document.getElementById('error');
+            error.style.display = 'block';
+            error.textContent = message;
+            log('ERROR: ' + message);
+        }
+
+        async function loadGraph() {
+            try {
+                log('Starting graph load...');
+                log('Fetching GraphML file...');
+                
+                const response = await fetch('/network_map.graphml');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const text = await response.text();
+                log('Received GraphML content, first 100 chars:', text.substring(0, 100));
+                
+                const parser = new DOMParser();
+                const xmlDoc = parser.parseFromString(text, "text/xml");
+                
+                if (xmlDoc.getElementsByTagName('parsererror').length > 0) {
+                    throw new Error('XML parsing failed');
+                }
+
+                // Parse nodes
+                const nodes = Array.from(xmlDoc.getElementsByTagName('node')).map(node => ({
+                    id: node.getAttribute('id'),
+                    username: node.querySelector('[key="username"]')?.textContent || '',
+                    display_name: node.querySelector('[key="display_name"]')?.textContent || '',
+                    description: node.querySelector('[key="description"]')?.textContent || ''
+                }));
+                log('Parsed nodes:', { count: nodes.length, sample: nodes.slice(0, 2) });
+
+                // Parse edges
+                const edges = Array.from(xmlDoc.getElementsByTagName('edge')).map(edge => ({
+                    source: edge.getAttribute('source'),
+                    target: edge.getAttribute('target'),
+                    type: 'follows'
+                }));
+                log('Parsed edges:', { count: edges.length, sample: edges.slice(0, 2) });
+
+                if (nodes.length === 0) {
+                    throw new Error('No nodes found in the GraphML file');
+                }
+                if (edges.length === 0) {
+                    throw new Error('No edges found in the GraphML file');
+                }
+
+                const width = document.getElementById('graph').clientWidth;
+                const height = document.getElementById('graph').clientHeight;
+                
+                const svg = d3.select('#graph')
+                    .append('svg')
+                    .attr('width', width)
+                    .attr('height', height);
+
+                // Add zoom behavior
+                const zoom = d3.zoom()
+                    .scaleExtent([0.1, 10])
+                    .on('zoom', (event) => {
+                        container.attr('transform', event.transform);
+                    });
+
+                svg.call(zoom);
+
+                const container = svg.append('g');
+
+                // Create arrow marker for directed edges
+                svg.append("defs").append("marker")
+                    .attr("id", "arrowhead")
+                    .attr("viewBox", "0 -5 10 10")
+                    .attr("refX", 20)
+                    .attr("refY", 0)
+                    .attr("markerWidth", 6)
+                    .attr("markerHeight", 6)
+                    .attr("orient", "auto")
+                    .append("path")
+                    .attr("d", "M0,-5L10,0L0,5")
+                    .attr("fill", "#666");
+
+                // Create a set of valid node IDs for quick lookup
+                const nodeIds = new Set(nodes.map(n => n.id));
+
+                // Filter edges to only include those with valid source and target nodes
+                const validEdges = edges.filter(edge => 
+                    nodeIds.has(edge.source) && nodeIds.has(edge.target)
+                );
+
+                log('Filtered edges:', { 
+                    original: edges.length, 
+                    valid: validEdges.length, 
+                    removed: edges.length - validEdges.length 
+                });
+
+                calculateHITS(nodes, edges);
+
+                const simulation = d3.forceSimulation(nodes)
+                    .force("link", d3.forceLink(validEdges)
+                        .id(d => d.id)
+                        .distance(() => +document.getElementById('linkDistance').value))
+                    .force("charge", d3.forceManyBody()
+                        .strength(() => +document.getElementById('charge').value))
+                    .force("center", d3.forceCenter(width / 2, height / 2));
+
+                const link = container.append("g")
+                    .selectAll("line")
+                    .data(validEdges)
+                    .join("line")
+                    .attr("class", "link")
+                    .attr("marker-end", "url(#arrowhead)");
+
+                const node = container.append("g")
+                    .selectAll("g")
+                    .data(nodes)
+                    .join("g")
+                    .attr("class", "node")
+                    .call(drag(simulation));
+
+                node.append("circle")
+                    .attr("r", d => {
+                        const score = Math.max(d.hubRank, d.authorityRank);
+                        return Math.max(4, Math.min(20, 4 + score * 16));
+                    })
+                    .attr("fill", d => getNodeColor(d, validEdges));
+
+                node.append("text")
+                    .attr("dx", 8)
+                    .attr("dy", ".35em")
+                    .text(d => d.username)
+                    .style("opacity", 0);
+
+                const tooltip = d3.select(".tooltip");
+
+                node.on("mouseover", function(event, d) {
+                    d3.select(this).select("text").style("opacity", 1);
+                    tooltip.style("display", "block")
+                        .html(`Username: ${d.username}<br>
+                               Display Name: ${d.display_name}<br>
+                               Description: ${d.description}<br>
+                               Hub Score: ${d.hub.toFixed(3)} (${(d.hubRank * 100).toFixed(1)}%)<br>
+                               Authority Score: ${d.authority.toFixed(3)} (${(d.authorityRank * 100).toFixed(1)}%)`)
+                        .style("left", (event.pageX + 10) + "px")
+                        .style("top", (event.pageY - 10) + "px");
+                })
+                .on("mouseout", function() {
+                    d3.select(this).select("text").style("opacity", 0);
+                    tooltip.style("display", "none");
+                });
+
+                // Update forces when controls change
+                d3.select("#linkDistance").on("input", function() {
+                    simulation.force("link").distance(+this.value);
+                    simulation.alpha(1).restart();
+                });
+
+                d3.select("#charge").on("input", function() {
+                    simulation.force("charge").strength(+this.value);
+                    simulation.alpha(1).restart();
+                });
+
+                // Search functionality
+                d3.select("#search").on("input", function() {
+                    const searchTerm = this.value.toLowerCase();
+                    node.each(function(d) {
+                        const element = d3.select(this);
+                        const matches = d.username.toLowerCase().includes(searchTerm);
+                        element.style("opacity", matches || !searchTerm ? 1 : 0.1);
+                    });
+                });
+
+                simulation.on("tick", () => {
+                    link
+                        .attr("x1", d => d.source.x)
+                        .attr("y1", d => d.source.y)
+                        .attr("x2", d => d.target.x)
+                        .attr("y2", d => d.target.y);
+
+                    node
+                        .attr("transform", d => `translate(${d.x},${d.y})`);
+                });
+
+                function calculateHITS(nodes, edges, iterations = 20) {
+                    // Initialize hub and authority scores
+                    nodes.forEach(node => {
+                        node.hub = 1.0;
+                        node.authority = 1.0;
+                    });
+
+                    // Create a map for faster node lookup
+                    const nodeMap = new Map(nodes.map(node => [node.id, node]));
+
+                    // HITS iterations
+                    for (let i = 0; i < iterations; i++) {
+                        // Authority update
+                        nodes.forEach(node => {
+                            node.authority = edges
+                                .filter(e => e.target === node.id)
+                                .reduce((sum, edge) => sum + nodeMap.get(edge.source).hub, 0);
+                        });
+
+                        // Hub update
+                        nodes.forEach(node => {
+                            node.hub = edges
+                                .filter(e => e.source === node.id)
+                                .reduce((sum, edge) => sum + nodeMap.get(edge.target).authority, 0);
+                        });
+
+                        // Normalize with max value instead of sqrt sum
+                        const maxAuth = Math.max(...nodes.map(n => n.authority));
+                        const maxHub = Math.max(...nodes.map(n => n.hub));
+                        
+                        nodes.forEach(node => {
+                            node.authority /= maxAuth || 1;
+                            node.hub /= maxHub || 1;
+                        });
+                    }
+
+                    // Calculate percentile ranks for better visualization
+                    const authorities = nodes.map(n => n.authority).sort((a, b) => a - b);
+                    const hubs = nodes.map(n => n.hub).sort((a, b) => a - b);
+                    
+                    nodes.forEach(node => {
+                        node.authorityRank = authorities.indexOf(node.authority) / authorities.length;
+                        node.hubRank = hubs.indexOf(node.hub) / hubs.length;
+                    });
+                }
+
+                function getNodeColor(node, edges) {
+                    // Use rank-based coloring for more contrast
+                    const h = node.hubRank;
+                    const a = node.authorityRank;
+                    
+                    if (h > a) {
+                        // Hub (blue spectrum)
+                        const intensity = Math.pow(h, 0.5); // Square root to boost low values
+                        return d3.interpolate("#1a237e", "#42a5f5")(intensity);
+                    } else {
+                        // Authority (green spectrum)
+                        const intensity = Math.pow(a, 0.5);
+                        return d3.interpolate("#1b5e20", "#66bb6a")(intensity);
+                    }
+                }
+
+                function drag(simulation) {
+                    function dragstarted(event) {
+                        if (!event.active) simulation.alphaTarget(0.3).restart();
+                        event.subject.fx = event.subject.x;
+                        event.subject.fy = event.subject.y;
+                    }
+
+                    function dragged(event) {
+                        event.subject.fx = event.x;
+                        event.subject.fy = event.y;
+                    }
+
+                    function dragended(event) {
+                        if (!event.active) simulation.alphaTarget(0);
+                        event.subject.fx = null;
+                        event.subject.fy = null;
+                    }
+
+                    return d3.drag()
+                        .on("start", dragstarted)
+                        .on("drag", dragged)
+                        .on("end", dragended);
+                }
+
+                let userEmbeddings = {};
+
+                // Load embeddings
+                async function loadEmbeddings() {
+                    try {
+                        log('Loading user embeddings...');
+                        const response = await fetch('/data/user_embeddings.json');
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        const text = await response.text();  // Get raw text first
+                        log('Raw response:', text.substring(0, 200) + '...');  // Show start of file
+                        
+                        const data = JSON.parse(text);
+                        userEmbeddings = data;
+                        
+                        // Log more details about the loaded data
+                        const userIds = Object.keys(userEmbeddings);
+                        log(`Loaded embeddings for ${userIds.length} users`);
+                        log('User IDs found:', userIds);
+                        
+                        if (userIds.length > 0) {
+                            const firstUser = userEmbeddings[userIds[0]];
+                            log('First user data structure:', {
+                                userId: userIds[0],
+                                hasEmbedding: !!firstUser.embedding,
+                                embeddingLength: firstUser.embedding ? firstUser.embedding.length : 0,
+                                metadata: firstUser.metadata
+                            });
+                        }
+                    } catch (error) {
+                        log('Error loading embeddings:', error);
+                        log('Stack trace:', error.stack);
+                    }
+                }
+
+                // Calculate cosine similarity
+                function cosineSimilarity(a, b) {
+                    const dotProduct = a.reduce((sum, val, i) => sum + val * b[i], 0);
+                    const normA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
+                    const normB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0));
+                    return dotProduct / (normA * normB);
+                }
+
+                // Add semantic force to simulation
+                async function addSemanticForce() {
+                    const loading = document.querySelector('.loading');
+                    loading.style.display = 'block';
+                    try {
+                        const searchTerm = document.getElementById('searchTerm').value;
+                        const forceStrength = document.getElementById('semanticForce').value / 50 - 1; // -1 to 1
+                        
+                        log(`Semantic search triggered: "${searchTerm}" (strength: ${forceStrength})`);
+                        
+                        if (!searchTerm) {
+                            log('Empty search term, removing semantic force');
+                            simulation.force('semantic', null);
+                            simulation.alpha(1).restart();
+                            return;
+                        }
+                        
+                        // Get embedding for search term from our Python backend
+                        log('Fetching embedding from backend...');
+                        try {
+                            const response = await fetch(`http://localhost:5000/get_embedding?text=${encodeURIComponent(searchTerm)}`);
+                            if (!response.ok) {
+                                const errorText = await response.text();
+                                throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+                            }
+                            const data = await response.json();
+                            
+                            if (data.error) {
+                                throw new Error(data.error);
+                            }
+                            
+                            if (!data.embedding || !Array.isArray(data.embedding)) {
+                                throw new Error('Invalid embedding format received from server');
+                            }
+                            
+                            const searchEmbedding = data.embedding;
+                            log('Received embedding from backend:', {
+                                length: searchEmbedding.length,
+                                sample: searchEmbedding.slice(0, 5)
+                            });
+                            
+                            // Add horizontal force based on similarity
+                            log('Calculating similarities and applying force...');
+                            let similarities = [];
+                            
+                            simulation.force('semantic', d3.forceX(d => {
+                                const userId = d.id;
+                                if (!userEmbeddings[userId]) {
+                                    log(`No embedding found for user ${userId}`);
+                                    return 0;
+                                }
+                                
+                                const userEmbedding = userEmbeddings[userId].embedding;
+                                const similarity = cosineSimilarity(searchEmbedding, userEmbedding);
+                                similarities.push({ userId, similarity });
+                                
+                                // Scale force by similarity (-1 to 1) and strength
+                                return similarity * forceStrength * width/2;
+                            }).strength(0.1));
+                            
+                            // Log similarity stats
+                            similarities.sort((a, b) => b.similarity - a.similarity);
+                            log('Similarity range:', {
+                                max: similarities[0],
+                                min: similarities[similarities.length - 1],
+                                avg: similarities.reduce((sum, s) => sum + s.similarity, 0) / similarities.length
+                            });
+                            
+                            // Restart simulation
+                            log('Restarting simulation');
+                            simulation.alpha(1).restart();
+                            
+                        } catch (error) {
+                            log('Error fetching embedding:', error.message);
+                            return;
+                        }
+                        
+                    } catch (error) {
+                        log('Error in semantic search:', error);
+                    } finally {
+                        loading.style.display = 'none';
+                    }
+                }
+
+                // Update controls with debounce
+                function debounce(func, wait) {
+                    let timeout;
+                    return function executedFunction(...args) {
+                        const later = () => {
+                            clearTimeout(timeout);
+                            func(...args);
+                        };
+                        clearTimeout(timeout);
+                        timeout = setTimeout(later, wait);
+                    };
+                }
+
+                // Debounce the semantic search to prevent too many API calls
+                const debouncedSemanticForce = debounce(addSemanticForce, 500);
+
+                // Update event listeners
+                d3.select('#searchTerm').on('input', debouncedSemanticForce);
+                d3.select('#semanticForce').on('input', debouncedSemanticForce);
+
+                // Initialize
+                async function init() {
+                    await loadEmbeddings();
+                    // ... rest of visualization code
+                }
+            } catch (error) {
+                showError(`Failed to load graph: ${error.message}`);
+                console.error('Error details:', error);
+            }
+        }
+
+        // Start loading when page is ready
+        document.addEventListener('DOMContentLoaded', loadGraph);
+    </script>
+</body>
+</html> 
