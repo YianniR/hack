@@ -941,7 +941,7 @@
 
         // Add this function before addSemanticForce
         async function getEmbedding(text) {
-            const response = await fetch(`http://localhost:5000/get_embedding?text=${encodeURIComponent(text)}`);
+            const response = await fetch(`/get_embedding?text=${encodeURIComponent(text)}`);
             if (!response.ok) {
                 throw new Error(`Failed to get embedding: ${response.status}`);
             }
