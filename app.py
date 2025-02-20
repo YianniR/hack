@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from vector_store import VectorStore
 import os
 from flask_cors import CORS
+import json
 
 app = Flask(__name__)
 CORS(app)
@@ -18,7 +19,24 @@ def serve_network_map():
 
 @app.route('/data/<path:filename>')
 def serve_data(filename):
-    return send_from_directory('data', filename)
+    try:
+        filepath = os.path.join('data', filename)
+        print(f"\nTrying to serve: {filepath}")
+        
+        if not os.path.exists(filepath):
+            print(f"File not found: {filepath}")
+            return "File not found", 404
+            
+        with open(filepath, 'r') as f:
+            if filename.endswith('.json'):
+                data = json.load(f)
+                print(f"Successfully loaded JSON with {len(data)} entries")
+                print("First entry:", next(iter(data.items())))
+                
+        return send_from_directory('data', filename)
+    except Exception as e:
+        print(f"Error serving {filename}: {e}")
+        return str(e), 500
 
 @app.route('/get_embedding', methods=['GET'])
 def get_embedding():

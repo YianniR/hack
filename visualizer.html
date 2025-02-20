@@ -21,7 +21,13 @@
         }
         .node circle {
             stroke: #fff;
-            stroke-width: 1.5px;
+            stroke-width: 2px;
+            transition: all 0.3s ease;
+        }
+        .node:hover circle {
+            stroke: #58a6ff;
+            stroke-width: 3px;
+            filter: brightness(1.2);
         }
         .node text {
             font-size: 10px;
@@ -45,22 +51,37 @@
         }
         .tooltip {
             position: absolute;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 10px;
-            border-radius: 4px;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 15px;
+            border-radius: 8px;
             font-size: 12px;
             pointer-events: none;
-            display: none;
+            opacity: 0;  /* Start hidden */
+            max-width: 300px;
+            border: 1px solid #555;
+            z-index: 1000;  /* Make sure it's above other elements */
+            transition: opacity 0.2s;
+        }
+        .tooltip a {
+            color: #58a6ff;
+            text-decoration: none;
+        }
+        .tooltip a:hover {
+            text-decoration: underline;
         }
         #error {
             position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
+            bottom: 20px;
+            right: 20px;
+            transform: none;
             background: rgba(255, 0, 0, 0.8);
             padding: 20px;
             border-radius: 8px;
             display: none;
+            max-width: 300px;
+            color: white;
+            font-size: 14px;
+            z-index: 1000;
         }
         #debug {
             position: fixed;
@@ -84,6 +105,41 @@
             border-radius: 4px;
             display: none;
         }
+        .grid line {
+            stroke: #333;
+            stroke-opacity: 0.2;
+        }
+        .x-axis path,
+        .y-axis path,
+        .x-axis line,
+        .y-axis line {
+            stroke: #666;
+        }
+        .x-axis text,
+        .y-axis text {
+            fill: #666;
+            font-size: 10px;
+        }
+        .axis-label {
+            fill: #888;
+            font-size: 12px;
+            text-anchor: middle;
+        }
+        .quadrants line {
+            stroke: #666;
+            stroke-opacity: 0.5;
+            stroke-dasharray: 4,4;
+        }
+        .quadrants text {
+            font-size: 12px;
+            fill: #666;
+            opacity: 0.7;
+        }
+        /* Add subtle quadrant backgrounds */
+        .quadrant-bg {
+            fill: #333;
+            opacity: 0.1;
+        }
     </style>
 </head>
 <body>
@@ -92,25 +148,18 @@
     <div id="debug"></div>
     <div class="controls">
         <div>
-            <label>Link Distance:</label>
-            <input type="range" id="linkDistance" min="30" max="300" value="100">
-        </div>
-        <div>
-            <label>Charge Strength:</label>
-            <input type="range" id="charge" min="-1000" max="0" value="-300">
-        </div>
-        <div>
-            <label>Search Username:</label>
+            <label>Username Search:</label>
             <input type="text" id="search" placeholder="Enter username...">
         </div>
         <div>
-            <label>Semantic Search:</label>
-            <input type="text" id="searchTerm" placeholder="Enter word or phrase...">
+            <label>X-Axis Semantic:</label>
+            <input type="text" id="searchTermX" placeholder="Enter word/phrase for X-axis...">
         </div>
         <div>
-            <label>Semantic Force Strength:</label>
-            <input type="range" id="semanticForce" min="0" max="100" value="50">
+            <label>Y-Axis Semantic:</label>
+            <input type="text" id="searchTermY" placeholder="Enter word/phrase for Y-axis...">
         </div>
+        <button id="updateSemanticLayout">Update Semantic Layout</button>
     </div>
     <div class="tooltip"></div>
     <div class="loading">Processing semantic search...</div>
@@ -137,11 +186,35 @@
             log('ERROR: ' + message);
         }
 
+        let userEmbeddings = {};  // Initialize globally
+        let nodes = [];          // Initialize nodes globally too
+        let simulation;          // Initialize simulation globally
+        let currentSimilarities = new Map();
+        let profiles = {};       // Initialize profiles globally
+        let node;               // For node elements 
+        let link;               // For link elements
+        let gridAndAxes;  // For the axes container
+        let width;        // For the SVG dimensions
+        let height;
+
         async function loadGraph() {
             try {
                 log('Starting graph load...');
-                log('Fetching GraphML file...');
                 
+                // Load embeddings first
+                log('Loading embeddings...');
+                userEmbeddings = await loadEmbeddings();
+                
+                // Load profiles and store globally
+                log('Loading user profiles...');
+                const profileResponse = await fetch('/data/user_profiles.json');
+                if (!profileResponse.ok) {
+                    throw new Error(`Failed to load profiles: ${profileResponse.status}`);
+                }
+                profiles = await profileResponse.json();  // Assign to global variable
+                log(`Loaded profiles for ${Object.keys(profiles).length} users`);
+                
+                log('Loading graph...');
                 const response = await fetch('/network_map.graphml');
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
@@ -158,7 +231,7 @@
                 }
 
                 // Parse nodes
-                const nodes = Array.from(xmlDoc.getElementsByTagName('node')).map(node => ({
+                nodes = Array.from(xmlDoc.getElementsByTagName('node')).map(node => ({
                     id: node.getAttribute('id'),
                     username: node.querySelector('[key="username"]')?.textContent || '',
                     display_name: node.querySelector('[key="display_name"]')?.textContent || '',
@@ -181,13 +254,42 @@
                     throw new Error('No edges found in the GraphML file');
                 }
 
+                // After loading embeddings and before creating nodes
+                // Filter nodes to only include those with embeddings
+                nodes = nodes.filter(node => {
+                    const hasEmbedding = userEmbeddings[node.id]?.embedding;
+                    if (!hasEmbedding) {
+                        log(`Skipping node without embedding: @${node.username} (${node.id})`);
+                    }
+                    return hasEmbedding;
+                });
+
+                log(`Filtered nodes: ${nodes.length} have embeddings`);
+
+                // Then filter edges to only include nodes with embeddings
+                const nodeIds = new Set(nodes.map(n => n.id));
+                const validEdges = edges.filter(edge => 
+                    nodeIds.has(edge.source) && nodeIds.has(edge.target)
+                );
+
+                log('Filtered edges:', { 
+                    original: edges.length, 
+                    valid: validEdges.length, 
+                    removed: edges.length - validEdges.length 
+                });
+
                 const width = document.getElementById('graph').clientWidth;
                 const height = document.getElementById('graph').clientHeight;
+                window.width = width;
+                window.height = height;
                 
                 const svg = d3.select('#graph')
                     .append('svg')
                     .attr('width', width)
                     .attr('height', height);
+
+                // Add defs for patterns
+                const defs = svg.append('defs');
 
                 // Add zoom behavior
                 const zoom = d3.zoom()
@@ -199,6 +301,11 @@
                 svg.call(zoom);
 
                 const container = svg.append('g');
+                gridAndAxes = container.append('g').attr('class', 'grid-and-axes');
+
+                // Create initial grid and axes
+                createGrid();
+                updateAxes();
 
                 // Create arrow marker for directed edges
                 svg.append("defs").append("marker")
@@ -213,50 +320,64 @@
                     .attr("d", "M0,-5L10,0L0,5")
                     .attr("fill", "#666");
 
-                // Create a set of valid node IDs for quick lookup
-                const nodeIds = new Set(nodes.map(n => n.id));
+                // Update simulation to only handle collisions
+                simulation = d3.forceSimulation(nodes)
+                    .force("collide", d3.forceCollide().radius(25))   // Only keep collision detection
+                    .force("x", null)
+                    .force("y", null);
 
-                // Filter edges to only include those with valid source and target nodes
-                const validEdges = edges.filter(edge => 
-                    nodeIds.has(edge.source) && nodeIds.has(edge.target)
-                );
-
-                log('Filtered edges:', { 
-                    original: edges.length, 
-                    valid: validEdges.length, 
-                    removed: edges.length - validEdges.length 
-                });
-
-                calculateHITS(nodes, edges);
-
-                const simulation = d3.forceSimulation(nodes)
-                    .force("link", d3.forceLink(validEdges)
-                        .id(d => d.id)
-                        .distance(() => +document.getElementById('linkDistance').value))
-                    .force("charge", d3.forceManyBody()
-                        .strength(() => +document.getElementById('charge').value))
-                    .force("center", d3.forceCenter(width / 2, height / 2));
-
-                const link = container.append("g")
+                // Update the link creation to store in global variable
+                link = container.append("g")
                     .selectAll("line")
                     .data(validEdges)
                     .join("line")
                     .attr("class", "link")
                     .attr("marker-end", "url(#arrowhead)");
 
-                const node = container.append("g")
+                // Update the node creation to store in global variable
+                node = container.append("g")
                     .selectAll("g")
                     .data(nodes)
                     .join("g")
                     .attr("class", "node")
                     .call(drag(simulation));
 
-                node.append("circle")
-                    .attr("r", d => {
-                        const score = Math.max(d.hubRank, d.authorityRank);
-                        return Math.max(4, Math.min(20, 4 + score * 16));
-                    })
-                    .attr("fill", d => getNodeColor(d, validEdges));
+                // Replace the circle with profile picture or fallback circle
+                node.each(function(d) {
+                    const nodeGroup = d3.select(this);
+                    const profile = profiles[d.id];
+                    
+                    if (profile?.avatar_url) {
+                        // Create unique pattern ID for this node
+                        const patternId = `avatar-${d.id}`;
+                        
+                        // Add pattern definition
+                        defs.append('pattern')
+                            .attr('id', patternId)
+                            .attr('width', 1)
+                            .attr('height', 1)
+                            .attr('patternUnits', 'objectBoundingBox')
+                            .append('image')
+                            .attr('xlink:href', profile.avatar_url)
+                            .attr('width', 40)  // Make image size larger
+                            .attr('height', 40)
+                            .attr('preserveAspectRatio', 'xMidYMid slice');
+                        
+                        // Add circle with pattern fill
+                        nodeGroup.append('circle')
+                            .attr('r', 20)  // Make nodes larger
+                            .style('fill', `url(#${patternId})`)
+                            .style('stroke', '#fff')
+                            .style('stroke-width', '2px');
+                    } else {
+                        // Fallback circle for nodes without images
+                        nodeGroup.append('circle')
+                            .attr('r', 20)
+                            .style('fill', d => getNodeColor(d))
+                            .style('stroke', '#fff')
+                            .style('stroke-width', '2px');
+                    }
+                });
 
                 node.append("text")
                     .attr("dx", 8)
@@ -264,33 +385,52 @@
                     .text(d => d.username)
                     .style("opacity", 0);
 
-                const tooltip = d3.select(".tooltip");
-
+                // Update the node event handlers
                 node.on("mouseover", function(event, d) {
+                    // Show username text
                     d3.select(this).select("text").style("opacity", 1);
-                    tooltip.style("display", "block")
-                        .html(`Username: ${d.username}<br>
-                               Display Name: ${d.display_name}<br>
-                               Description: ${d.description}<br>
-                               Hub Score: ${d.hub.toFixed(3)} (${(d.hubRank * 100).toFixed(1)}%)<br>
-                               Authority Score: ${d.authority.toFixed(3)} (${(d.authorityRank * 100).toFixed(1)}%)`)
-                        .style("left", (event.pageX + 10) + "px")
-                        .style("top", (event.pageY - 10) + "px");
+                    
+                    // Show tooltip with full debug
+                    log(`Mouse over: ${d.username} (${d.id})`);
+                    const profile = profiles[d.id];
+                    log(`Profile data:`, profile);
+                    const similarity = currentSimilarities.get(d.id);
+                    log(`Similarity:`, similarity);
+                    
+                    const tooltip = d3.select(".tooltip");
+                    tooltip.transition()
+                        .duration(200)
+                        .style("opacity", .9);
+                        
+                    tooltip.html(`
+                        <div style="text-align: center;">
+                            <strong>@${d.username}</strong>
+                            ${profile?.bio ? `<br><em>${profile.bio}</em>` : ''}
+                            ${profile?.location ? `<br>📍 ${profile.location}` : ''}
+                            ${profile?.website ? `<br>🔗 <a href="${profile.website}" target="_blank">${profile.website}</a>` : ''}
+                            ${currentSimilarities.size > 0 && similarity ? `
+                                <br><br>
+                                <div style="background: rgba(255,255,255,0.1); padding: 5px; border-radius: 4px;">
+                                    ${searchTermX ? `"${searchTermX}": <strong>${(similarity.x * 100).toFixed(1)}%</strong><br>` : ''}
+                                    ${searchTermY ? `"${searchTermY}": <strong>${(similarity.y * 100).toFixed(1)}%</strong>` : ''}
+                                </div>
+                            ` : ''}
+                        </div>
+                    `)
+                    .style("left", (event.pageX + 10) + "px")
+                    .style("top", (event.pageY - 10) + "px")
+                    .style("display", "block");
                 })
                 .on("mouseout", function() {
+                    // Hide username text
                     d3.select(this).select("text").style("opacity", 0);
-                    tooltip.style("display", "none");
-                });
-
-                // Update forces when controls change
-                d3.select("#linkDistance").on("input", function() {
-                    simulation.force("link").distance(+this.value);
-                    simulation.alpha(1).restart();
-                });
-
-                d3.select("#charge").on("input", function() {
-                    simulation.force("charge").strength(+this.value);
-                    simulation.alpha(1).restart();
+                    
+                    // Hide tooltip
+                    d3.select(".tooltip")
+                        .transition()
+                        .duration(500)
+                        .style("opacity", 0)
+                        .style("display", "none");
                 });
 
                 // Search functionality
@@ -314,66 +454,8 @@
                         .attr("transform", d => `translate(${d.x},${d.y})`);
                 });
 
-                function calculateHITS(nodes, edges, iterations = 20) {
-                    // Initialize hub and authority scores
-                    nodes.forEach(node => {
-                        node.hub = 1.0;
-                        node.authority = 1.0;
-                    });
-
-                    // Create a map for faster node lookup
-                    const nodeMap = new Map(nodes.map(node => [node.id, node]));
-
-                    // HITS iterations
-                    for (let i = 0; i < iterations; i++) {
-                        // Authority update
-                        nodes.forEach(node => {
-                            node.authority = edges
-                                .filter(e => e.target === node.id)
-                                .reduce((sum, edge) => sum + nodeMap.get(edge.source).hub, 0);
-                        });
-
-                        // Hub update
-                        nodes.forEach(node => {
-                            node.hub = edges
-                                .filter(e => e.source === node.id)
-                                .reduce((sum, edge) => sum + nodeMap.get(edge.target).authority, 0);
-                        });
-
-                        // Normalize with max value instead of sqrt sum
-                        const maxAuth = Math.max(...nodes.map(n => n.authority));
-                        const maxHub = Math.max(...nodes.map(n => n.hub));
-                        
-                        nodes.forEach(node => {
-                            node.authority /= maxAuth || 1;
-                            node.hub /= maxHub || 1;
-                        });
-                    }
-
-                    // Calculate percentile ranks for better visualization
-                    const authorities = nodes.map(n => n.authority).sort((a, b) => a - b);
-                    const hubs = nodes.map(n => n.hub).sort((a, b) => a - b);
-                    
-                    nodes.forEach(node => {
-                        node.authorityRank = authorities.indexOf(node.authority) / authorities.length;
-                        node.hubRank = hubs.indexOf(node.hub) / hubs.length;
-                    });
-                }
-
-                function getNodeColor(node, edges) {
-                    // Use rank-based coloring for more contrast
-                    const h = node.hubRank;
-                    const a = node.authorityRank;
-                    
-                    if (h > a) {
-                        // Hub (blue spectrum)
-                        const intensity = Math.pow(h, 0.5); // Square root to boost low values
-                        return d3.interpolate("#1a237e", "#42a5f5")(intensity);
-                    } else {
-                        // Authority (green spectrum)
-                        const intensity = Math.pow(a, 0.5);
-                        return d3.interpolate("#1b5e20", "#66bb6a")(intensity);
-                    }
+                function getNodeColor(d) {
+                    return "#666";  // Default color for nodes without profile pics
                 }
 
                 function drag(simulation) {
@@ -400,39 +482,61 @@
                         .on("end", dragended);
                 }
 
-                let userEmbeddings = {};
+                // Add this helper function at the top level
+                function getLatestEmbedding(userData) {
+                    if (!userData) return null;
+                    
+                    // Get all weeks sorted in descending order
+                    const weeks = Object.keys(userData).sort().reverse();
+                    
+                    // Find first week that has an embedding
+                    for (const week of weeks) {
+                        if (userData[week]?.embedding) {
+                            return userData[week].embedding;
+                        }
+                    }
+                    return null;
+                }
 
-                // Load embeddings
+                // Update the loadEmbeddings function
                 async function loadEmbeddings() {
                     try {
-                        log('Loading user embeddings...');
+                        log('Loading embeddings...');
                         const response = await fetch('/data/user_embeddings.json');
                         if (!response.ok) {
                             throw new Error(`HTTP error! status: ${response.status}`);
                         }
-                        const text = await response.text();  // Get raw text first
-                        log('Raw response:', text.substring(0, 200) + '...');  // Show start of file
                         
-                        const data = JSON.parse(text);
-                        userEmbeddings = data;
+                        const weeklyData = await response.json();
+                        log(`Received embeddings file (${response.headers.get('content-length')} bytes)`);
                         
-                        // Log more details about the loaded data
-                        const userIds = Object.keys(userEmbeddings);
-                        log(`Loaded embeddings for ${userIds.length} users`);
-                        log('User IDs found:', userIds);
+                        // Convert weekly data to flat structure using latest embeddings
+                        const flattenedEmbeddings = {};
+                        for (const [userId, userData] of Object.entries(weeklyData)) {
+                            const latestEmbedding = getLatestEmbedding(userData);
+                            if (latestEmbedding) {
+                                flattenedEmbeddings[userId] = {
+                                    embedding: latestEmbedding
+                                };
+                            }
+                        }
                         
-                        if (userIds.length > 0) {
-                            const firstUser = userEmbeddings[userIds[0]];
-                            log('First user data structure:', {
-                                userId: userIds[0],
-                                hasEmbedding: !!firstUser.embedding,
-                                embeddingLength: firstUser.embedding ? firstUser.embedding.length : 0,
-                                metadata: firstUser.metadata
+                        const userCount = Object.keys(flattenedEmbeddings).length;
+                        log(`Successfully parsed embeddings for ${userCount} users`);
+                        
+                        if (userCount > 0) {
+                            const sampleUserId = Object.keys(flattenedEmbeddings)[0];
+                            log('Sample embedding:', {
+                                userId: sampleUserId,
+                                embeddingLength: flattenedEmbeddings[sampleUserId].embedding.length
                             });
                         }
+                        
+                        return flattenedEmbeddings;
+                        
                     } catch (error) {
                         log('Error loading embeddings:', error);
-                        log('Stack trace:', error.stack);
+                        throw error;
                     }
                 }
 
@@ -444,89 +548,277 @@
                     return dotProduct / (normA * normB);
                 }
 
-                // Add semantic force to simulation
+                // First, let's create a quadrant-based layout system
+                function createQuadrantSystem(container, width, height) {
+                    // Add quadrant lines
+                    const quadrants = container.append('g').attr('class', 'quadrants');
+                    
+                    // Vertical center line
+                    quadrants.append('line')
+                        .attr('x1', width/2)
+                        .attr('y1', 0)
+                        .attr('x2', width/2)
+                        .attr('y2', height)
+                        .attr('stroke', '#666')
+                        .attr('stroke-width', 2);
+                    
+                    // Horizontal center line
+                    quadrants.append('line')
+                        .attr('x1', 0)
+                        .attr('y1', height/2)
+                        .attr('x2', width)
+                        .attr('y2', height/2)
+                        .attr('stroke', '#666')
+                        .attr('stroke-width', 2);
+                    
+                    // Add quadrant labels
+                    const labels = [
+                        { x: width * 0.25, y: height * 0.25, text: "Q2: High Y, Low X" },
+                        { x: width * 0.75, y: height * 0.25, text: "Q1: High Y, High X" },
+                        { x: width * 0.25, y: height * 0.75, text: "Q3: Low Y, Low X" },
+                        { x: width * 0.75, y: height * 0.75, text: "Q4: Low Y, High X" }
+                    ];
+                    
+                    quadrants.selectAll('text')
+                        .data(labels)
+                        .enter()
+                        .append('text')
+                        .attr('x', d => d.x)
+                        .attr('y', d => d.y)
+                        .attr('text-anchor', 'middle')
+                        .attr('fill', '#666')
+                        .text(d => d.text);
+                }
+
+                // First, add these helper functions for coordinate conversion
+                function createCoordinateSystem() {
+                    const margin = {top: 50, right: 50, bottom: 50, left: 50};
+                    const graphWidth = width - margin.left - margin.right;
+                    const graphHeight = height - margin.top - margin.bottom;
+
+                    // Create scales for data-to-screen conversion
+                    const xScale = d3.scaleLinear()
+                        .domain([0, 1])
+                        .range([margin.left, width - margin.right]);
+
+                    const yScale = d3.scaleLinear()
+                        .domain([0, 1])
+                        .range([height - margin.bottom, margin.top]); // Inverted for y-axis
+
+                    return {margin, graphWidth, graphHeight, xScale, yScale};
+                }
+
+                // Update the axes creation
+                function updateAxes(searchTermX, searchTermY) {
+                    if (!gridAndAxes) return;
+
+                    // Clear previous axes
+                    gridAndAxes.selectAll('*').remove();
+
+                    const {margin, graphWidth, graphHeight, xScale, yScale} = createCoordinateSystem();
+
+                    // Create axes
+                    const xAxis = d3.axisBottom(xScale)
+                        .ticks(10)
+                        .tickFormat(d3.format('.1f'));
+                    
+                    const yAxis = d3.axisLeft(yScale)
+                        .ticks(10)
+                        .tickFormat(d3.format('.1f'));
+
+                    // Add X axis
+                    gridAndAxes.append('g')
+                        .attr('class', 'x-axis')
+                        .attr('transform', `translate(0,${height - margin.bottom})`)
+                        .call(xAxis)
+                        .call(g => g.selectAll('.tick line')
+                            .clone()
+                            .attr('y2', -(graphHeight))
+                            .attr('stroke-opacity', 0.1));
+
+                    // Add Y axis
+                    gridAndAxes.append('g')
+                        .attr('class', 'y-axis')
+                        .attr('transform', `translate(${margin.left},0)`)
+                        .call(yAxis)
+                        .call(g => g.selectAll('.tick line')
+                            .clone()
+                            .attr('x2', graphWidth)
+                            .attr('stroke-opacity', 0.1));
+
+                    // Add axis labels with better positioning
+                    if (searchTermX) {
+                        gridAndAxes.append('text')
+                            .attr('class', 'axis-label')
+                            .attr('x', width / 2)
+                            .attr('y', height - margin.bottom / 3)
+                            .attr('text-anchor', 'middle')
+                            .attr('fill', '#666')
+                            .style('font-size', '14px')
+                            .text(searchTermX);
+                    }
+
+                    if (searchTermY) {
+                        gridAndAxes.append('text')
+                            .attr('class', 'axis-label')
+                            .attr('transform', `rotate(-90) translate(${-height/2}, ${margin.left/3})`)
+                            .attr('text-anchor', 'middle')
+                            .attr('fill', '#666')
+                            .style('font-size', '14px')
+                            .text(searchTermY);
+                    }
+
+                    // Style axes
+                    gridAndAxes.selectAll('.tick line')
+                        .attr('stroke', '#666');
+                    
+                    gridAndAxes.selectAll('.tick text')
+                        .attr('fill', '#666')
+                        .style('font-size', '10px');
+                    
+                    gridAndAxes.selectAll('path.domain')
+                        .attr('stroke', '#666')
+                        .attr('stroke-width', 1.5);
+                }
+
+                // Update the node positioning to use the new coordinate system
+                function positionNodes(nodes, similarities, width, height) {
+                    const {margin, xScale, yScale} = createCoordinateSystem();
+                    
+                    // Find min/max values for normalization
+                    let minX = 1, maxX = -1, minY = 1, maxY = -1;
+                    similarities.forEach(sim => {
+                        minX = Math.min(minX, sim.x);
+                        maxX = Math.max(maxX, sim.x);
+                        minY = Math.min(minY, sim.y);
+                        maxY = Math.max(maxY, sim.y);
+                    });
+
+                    nodes.forEach(node => {
+                        const sim = similarities.get(node.id);
+                        if (!sim) return;
+                        
+                        // Normalize values to 0-1 range
+                        const normalizedX = (sim.x - minX) / (maxX - minX);
+                        const normalizedY = (sim.y - minY) / (maxY - minY);
+                        
+                        // Use scales to convert to screen coordinates
+                        node.x = xScale(normalizedX);
+                        node.y = yScale(normalizedY);
+                        
+                        // Add small random jitter to prevent overlaps
+                        const jitter = 3;
+                        node.x += (Math.random() - 0.5) * jitter;
+                        node.y += (Math.random() - 0.5) * jitter;
+                        
+                        // Constrain to margins
+                        node.x = Math.max(margin.left, Math.min(width - margin.right, node.x));
+                        node.y = Math.max(margin.top, Math.min(height - margin.bottom, node.y));
+                    });
+                }
+
+                // Update the semantic search function
                 async function addSemanticForce() {
                     const loading = document.querySelector('.loading');
                     loading.style.display = 'block';
+                    
                     try {
-                        const searchTerm = document.getElementById('searchTerm').value;
-                        const forceStrength = document.getElementById('semanticForce').value / 50 - 1; // -1 to 1
+                        const searchTermX = document.getElementById('searchTermX').value;
+                        const searchTermY = document.getElementById('searchTermY').value;
                         
-                        log(`Semantic search triggered: "${searchTerm}" (strength: ${forceStrength})`);
-                        
-                        if (!searchTerm) {
-                            log('Empty search term, removing semantic force');
-                            simulation.force('semantic', null);
-                            simulation.alpha(1).restart();
+                        if (!searchTermX || !searchTermY) {
+                            showError("Please enter both X and Y axis terms");
                             return;
                         }
                         
-                        // Get embedding for search term from our Python backend
-                        log('Fetching embedding from backend...');
-                        try {
-                            const response = await fetch(`http://localhost:5000/get_embedding?text=${encodeURIComponent(searchTerm)}`);
-                            if (!response.ok) {
-                                const errorText = await response.text();
-                                throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
-                            }
-                            const data = await response.json();
-                            
-                            if (data.error) {
-                                throw new Error(data.error);
-                            }
-                            
-                            if (!data.embedding || !Array.isArray(data.embedding)) {
-                                throw new Error('Invalid embedding format received from server');
-                            }
-                            
-                            const searchEmbedding = data.embedding;
-                            log('Received embedding from backend:', {
-                                length: searchEmbedding.length,
-                                sample: searchEmbedding.slice(0, 5)
+                        // Get embeddings and calculate similarities
+                        const similarities = new Map();
+                        const [embeddingX, embeddingY] = await Promise.all([
+                            getEmbedding(searchTermX),
+                            getEmbedding(searchTermY)
+                        ]);
+                        
+                        // Calculate similarities for all nodes
+                        nodes.forEach(node => {
+                            const nodeEmbedding = userEmbeddings[node.id].embedding;
+                            similarities.set(node.id, {
+                                x: cosineSimilarity(embeddingX, nodeEmbedding),
+                                y: cosineSimilarity(embeddingY, nodeEmbedding)
                             });
-                            
-                            // Add horizontal force based on similarity
-                            log('Calculating similarities and applying force...');
-                            let similarities = [];
-                            
-                            simulation.force('semantic', d3.forceX(d => {
-                                const userId = d.id;
-                                if (!userEmbeddings[userId]) {
-                                    log(`No embedding found for user ${userId}`);
-                                    return 0;
-                                }
-                                
-                                const userEmbedding = userEmbeddings[userId].embedding;
-                                const similarity = cosineSimilarity(searchEmbedding, userEmbedding);
-                                similarities.push({ userId, similarity });
-                                
-                                // Scale force by similarity (-1 to 1) and strength
-                                return similarity * forceStrength * width/2;
-                            }).strength(0.1));
-                            
-                            // Log similarity stats
-                            similarities.sort((a, b) => b.similarity - a.similarity);
-                            log('Similarity range:', {
-                                max: similarities[0],
-                                min: similarities[similarities.length - 1],
-                                avg: similarities.reduce((sum, s) => sum + s.similarity, 0) / similarities.length
-                            });
-                            
-                            // Restart simulation
-                            log('Restarting simulation');
-                            simulation.alpha(1).restart();
-                            
-                        } catch (error) {
-                            log('Error fetching embedding:', error.message);
-                            return;
-                        }
+                        });
+                        
+                        // Store similarities and position nodes
+                        currentSimilarities = similarities;
+                        positionNodes(nodes, similarities, width, height);
+                        
+                        // Update visualization
+                        updateVisualization();
+                        
+                        // Log quadrant counts
+                        logQuadrantStats(similarities);
                         
                     } catch (error) {
-                        log('Error in semantic search:', error);
+                        showError(error.message);
                     } finally {
                         loading.style.display = 'none';
                     }
                 }
+
+                // Add quadrant statistics
+                function logQuadrantStats(similarities) {
+                    const quadrants = {
+                        "Q1 (High X, High Y)": 0,
+                        "Q2 (Low X, High Y)": 0,
+                        "Q3 (Low X, Low Y)": 0,
+                        "Q4 (High X, Low Y)": 0
+                    };
+                    
+                    similarities.forEach(sim => {
+                        if (sim.x >= 0 && sim.y >= 0) quadrants["Q1 (High X, High Y)"]++;
+                        else if (sim.x < 0 && sim.y >= 0) quadrants["Q2 (Low X, High Y)"]++;
+                        else if (sim.x < 0 && sim.y < 0) quadrants["Q3 (Low X, Low Y)"]++;
+                        else quadrants["Q4 (High X, Low Y)"]++;
+                    });
+                    
+                    log("Quadrant distribution:", quadrants);
+                }
+
+                // Update tooltip to show normalized values
+                function showTooltip(event, d) {
+                    const profile = profiles[d.id];
+                    const similarity = currentSimilarities.get(d.id);
+                    const searchTermX = document.getElementById('searchTermX').value;
+                    const searchTermY = document.getElementById('searchTermY').value;
+                    
+                    const tooltip = d3.select(".tooltip");
+                    tooltip.transition()
+                        .duration(200)
+                        .style("opacity", .9);
+                        
+                    tooltip.html(`
+                        <div style="text-align: center;">
+                            <strong>@${d.username}</strong>
+                            ${profile?.bio ? `<br><em>${profile.bio}</em>` : ''}
+                            ${profile?.location ? `<br>📍 ${profile.location}` : ''}
+                            ${profile?.website ? `<br>🔗 <a href="${profile.website}" target="_blank">${profile.website}</a>` : ''}
+                            ${currentSimilarities.size > 0 && similarity ? `
+                                <br><br>
+                                <div style="background: rgba(255,255,255,0.1); padding: 5px; border-radius: 4px;">
+                                    ${searchTermX ? `"${searchTermX}": <strong>${(similarity.x * 100).toFixed(1)}%</strong><br>` : ''}
+                                    ${searchTermY ? `"${searchTermY}": <strong>${(similarity.y * 100).toFixed(1)}%</strong>` : ''}
+                                </div>
+                            ` : ''}
+                        </div>
+                    `)
+                    .style("left", (event.pageX + 10) + "px")
+                    .style("top", (event.pageY - 10) + "px")
+                    .style("display", "block");
+                }
+
+                // Add button handler
+                document.getElementById('updateSemanticLayout').addEventListener('click', () => {
+                    addSemanticForce();
+                });
 
                 // Update controls with debounce
                 function debounce(func, wait) {
@@ -541,21 +833,81 @@
                     };
                 }
 
-                // Debounce the semantic search to prevent too many API calls
-                const debouncedSemanticForce = debounce(addSemanticForce, 500);
-
-                // Update event listeners
-                d3.select('#searchTerm').on('input', debouncedSemanticForce);
-                d3.select('#semanticForce').on('input', debouncedSemanticForce);
-
-                // Initialize
+                // Move initialization here
                 async function init() {
-                    await loadEmbeddings();
-                    // ... rest of visualization code
+                    // Add semantic force handlers
+                    const debouncedSemanticForce = debounce(addSemanticForce, 500);
+                    d3.select('#searchTermX').on('input', debouncedSemanticForce);
+                    d3.select('#searchTermY').on('input', debouncedSemanticForce);
                 }
+                
+                await init();  // Wait for initialization
+                log('Initialization complete');
+                
             } catch (error) {
                 showError(`Failed to load graph: ${error.message}`);
                 console.error('Error details:', error);
+            }
+        }
+
+        // Add this function before addSemanticForce
+        async function getEmbedding(text) {
+            const response = await fetch(`http://localhost:5000/get_embedding?text=${encodeURIComponent(text)}`);
+            if (!response.ok) {
+                throw new Error(`Failed to get embedding: ${response.status}`);
+            }
+            const data = await response.json();
+            return data.embedding;
+        }
+
+        // Move updateVisualization to global scope
+        function updateVisualization() {
+            if (!node || !link) return; // Guard against undefined elements
+            
+            // Update node positions
+            node.attr("transform", d => `translate(${d.x},${d.y})`);
+            
+            // Update links
+            link
+                .attr("x1", d => d.source.x)
+                .attr("y1", d => d.source.y)
+                .attr("x2", d => d.target.x)
+                .attr("y2", d => d.target.y);
+            
+            // Update axes
+            const searchTermX = document.getElementById('searchTermX').value;
+            const searchTermY = document.getElementById('searchTermY').value;
+            updateAxes(searchTermX, searchTermY);
+        }
+
+        // Move createGrid function to global scope (outside loadGraph)
+        function createGrid() {
+            const gridSize = 50; // Size of grid squares
+            const numLinesX = Math.floor(width / gridSize);
+            const numLinesY = Math.floor(height / gridSize);
+            
+            // Remove old grid
+            gridAndAxes.selectAll('.grid').remove();
+            
+            // Create grid
+            const grid = gridAndAxes.append('g').attr('class', 'grid');
+            
+            // Vertical lines
+            for (let i = 0; i <= numLinesX; i++) {
+                grid.append('line')
+                    .attr('x1', i * gridSize)
+                    .attr('y1', 0)
+                    .attr('x2', i * gridSize)
+                    .attr('y2', height);
+            }
+            
+            // Horizontal lines
+            for (let i = 0; i <= numLinesY; i++) {
+                grid.append('line')
+                    .attr('x1', 0)
+                    .attr('y1', i * gridSize)
+                    .attr('x2', width)
+                    .attr('y2', i * gridSize);
             }
         }
 

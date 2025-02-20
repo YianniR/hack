@@ -111,20 +111,52 @@ class TweetFetcher(SupabaseClient):
         logging.info(f"Total tweets fetched: {len(all_tweets)}")
         return all_tweets
 
-    async def fetch_user_tweets(self, user_id: str, limit: int = 5) -> List[Dict]:
-        """Fetch most recent tweets for a user"""
+    async def fetch_user_tweets(self, user_id: str, limit: int = None, days: int = None) -> List[Dict]:
+        """Fetch all tweets for a user with pagination and date filtering"""
+        all_tweets = []
+        offset = 0
+        batch_size = 1000
+        
+        # Calculate cutoff date if days specified
+        cutoff_date = None
+        if days:
+            cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
+        
         try:
-            response = self.client.table('tweets')\
-                .select('*')\
-                .eq('account_id', user_id)\
-                .order('created_at', desc=True)\
-                .limit(limit)\
-                .execute()
+            while True:
+                query = self.client.table('tweets')\
+                    .select('*')\
+                    .eq('account_id', user_id)\
+                    .order('created_at', desc=True)
+                
+                # Add date filter to query
+                if cutoff_date:
+                    query = query.gte('created_at', cutoff_date)
+                
+                query = query.range(offset, offset + batch_size - 1)
+                
+                response = query.execute()
+                batch = response.data
+                
+                if not batch:
+                    break
+                    
+                all_tweets.extend(batch)
+                
+                # Stop if we have enough or if last tweet is too old
+                if limit and len(all_tweets) >= limit:
+                    all_tweets = all_tweets[:limit]
+                    break
+                
+                if cutoff_date and batch[-1]['created_at'] < cutoff_date:
+                    break
+                    
+                offset += batch_size
+                time.sleep(0.1)
             
-            tweets = response.data
-            if tweets:
-                logging.info(f"Found {len(tweets)} tweets for user {user_id}")
-            return tweets
+            logging.info(f"Found {len(all_tweets)} total tweets for user {user_id}")
+            return all_tweets
+            
         except Exception as e:
             logging.error(f"Error fetching tweets for user {user_id}: {str(e)}")
             return []
@@ -198,6 +230,40 @@ class FollowFetcher(SupabaseClient):
 
         return list(all_following)
 
+class ProfileFetcher(SupabaseClient):
+    def fetch_batch(self, offset: int = 0, limit: int = 1000) -> List[Dict]:
+        """Fetch a batch of profiles"""
+        try:
+            response = self.client.table('profile').select('*').range(offset, offset + limit - 1).execute()
+            return response.data
+        except Exception as e:
+            logging.error(f"Error fetching profiles batch: {str(e)}")
+            return []
+
+    def fetch_all(self) -> List[Dict]:
+        """Fetch all profiles"""
+        all_profiles = []
+        offset = 0
+        batch_size = 1000
+
+        while True:
+            logging.info(f"Fetching profiles {offset} to {offset + batch_size}...")
+            batch = self.fetch_batch(offset, batch_size)
+            
+            if not batch:
+                break
+            
+            all_profiles.extend(batch)
+            offset += batch_size
+            
+            if len(batch) < batch_size:
+                break
+            
+            time.sleep(0.1)  # To avoid hitting rate limits
+
+        logging.info(f"Total profiles fetched: {len(all_profiles)}")
+        return all_profiles
+
 def save_data(data: List[Dict], filename: str):
     filepath = os.path.join(DATA_DIR, filename)
     save_pickle(data, filepath)
@@ -207,6 +273,7 @@ def fetch_data_main(args):
     account_fetcher = AccountFetcher()
     tweet_fetcher = TweetFetcher()
     follow_fetcher = FollowFetcher()
+    profile_fetcher = ProfileFetcher()
 
     # Fetch and save accounts
     accounts = account_fetcher.fetch_all()
@@ -218,8 +285,9 @@ def fetch_data_main(args):
 
     tweets_dict = {}
     follows_dict = {}
+    profiles_dict = {}
     
-    # Fetch and save tweets and follow data for each username
+    # Fetch and save tweets, follow data, and profile data for each username
     for username in args.usernames:
         account_id = account_map.get(username)
         if account_id is None:
@@ -238,7 +306,11 @@ def fetch_data_main(args):
             'following': following
         }
 
-    return tweets_dict, follows_dict
+        logging.info(f"Fetching profile for {username}")
+        profile = profile_fetcher.fetch_all()
+        profiles_dict[username] = profile
+
+    return tweets_dict, follows_dict, profiles_dict
 
 async def test_tweet_fetch():
     """Test function to verify tweet fetching"""
@@ -277,4 +349,4 @@ if __name__ == "__main__":
         parser.add_argument("--end_date", help="End date for tweet fetch (YYYY-MM-DD)")
         parser.add_argument("--keywords", nargs='*', help="Keywords to filter tweets (optional)")
         args = parser.parse_args()
-        tweets_dict, follows_dict = fetch_data_main(args)
+        tweets_dict, follows_dict, profiles_dict = fetch_data_main(args)
