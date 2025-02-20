@@ -41,7 +41,6 @@ env/
 
 # Project specific
 network_map.graphml
-user_embeddings.json
 
 # Un-ignore specific files
 !data/.gitkeep
