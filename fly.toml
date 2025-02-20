@@ -1,4 +1,4 @@
-app = "your-app-name"
+app = "memetic-microscope"
 
 [build]
   dockerfile = "Dockerfile"
