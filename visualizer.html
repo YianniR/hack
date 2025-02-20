@@ -140,6 +140,49 @@
             fill: #333;
             opacity: 0.1;
         }
+        /* Add these styles for the time slider */
+        .time-control {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid #444;
+        }
+        
+        .time-control label {
+            display: block;
+            margin-bottom: 10px;
+        }
+        
+        .time-display {
+            text-align: center;
+            margin: 5px 0;
+            font-size: 14px;
+            color: #888;
+        }
+        
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 8px;
+            border-radius: 4px;
+            background: #444;
+            outline: none;
+            margin: 10px 0;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #58a6ff;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb:hover {
+            background: #79beff;
+            transform: scale(1.1);
+        }
     </style>
 </head>
 <body>
@@ -160,6 +203,11 @@
             <input type="text" id="searchTermY" placeholder="Enter word/phrase for Y-axis...">
         </div>
         <button id="updateSemanticLayout">Update Semantic Layout</button>
+        <div class="time-control">
+            <label>Time Period:</label>
+            <input type="range" id="timeSlider" min="0" max="100" value="100">
+            <div id="timeDisplay" class="time-display">Loading dates...</div>
+        </div>
     </div>
     <div class="tooltip"></div>
     <div class="loading">Processing semantic search...</div>
@@ -196,6 +244,9 @@
         let gridAndAxes;  // For the axes container
         let width;        // For the SVG dimensions
         let height;
+        let allWeeks = [];
+        let currentWeek = null;
+        let weeklyData = null;  // Will store the full weekly data structure
 
         async function loadGraph() {
             try {
@@ -507,9 +558,24 @@
                             throw new Error(`HTTP error! status: ${response.status}`);
                         }
                         
-                        const weeklyData = await response.json();
+                        weeklyData = await response.json();
                         log(`Received embeddings file (${response.headers.get('content-length')} bytes)`);
                         
+                        // Collect all unique weeks
+                        allWeeks = new Set();
+                        Object.values(weeklyData).forEach(userData => {
+                            Object.keys(userData).forEach(week => {
+                                if (userData[week]?.embedding) {
+                                    allWeeks.add(week);
+                                }
+                            });
+                        });
+                        allWeeks = Array.from(allWeeks).sort();
+                        currentWeek = allWeeks[allWeeks.length - 1];  // Start with most recent
+                        
+                        // Initialize time slider
+                        initializeTimeSlider();
+
                         // Convert weekly data to flat structure using latest embeddings
                         const flattenedEmbeddings = {};
                         for (const [userId, userData] of Object.entries(weeklyData)) {
@@ -533,11 +599,34 @@
                         }
                         
                         return flattenedEmbeddings;
-                        
                     } catch (error) {
                         log('Error loading embeddings:', error);
                         throw error;
                     }
+                }
+
+                // Add this function to initialize the time slider
+                function initializeTimeSlider() {
+                    const slider = document.getElementById('timeSlider');
+                    const display = document.getElementById('timeDisplay');
+                    
+                    // Set slider range
+                    slider.min = 0;
+                    slider.max = allWeeks.length - 1;
+                    slider.value = allWeeks.length - 1;  // Start at most recent
+                    
+                    // Update display
+                    const displayDate = new Date(currentWeek);
+                    display.textContent = `Week of ${displayDate.toLocaleDateString()}`;
+                    
+                    // Add event listener
+                    slider.addEventListener('input', (event) => {
+                        const weekIndex = parseInt(event.target.value);
+                        currentWeek = allWeeks[weekIndex];
+                        const date = new Date(currentWeek);
+                        display.textContent = `Week of ${date.toLocaleDateString()}`;
+                        // We'll add the actual update logic later
+                    });
                 }
 
                 // Calculate cosine similarity

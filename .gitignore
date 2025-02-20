@@ -27,7 +27,6 @@ env/
 .env
 
 # Data and Logs
-data/
 *.log
 *.json
 *.graphml
