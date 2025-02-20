@@ -6,8 +6,18 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-# Load the model
-model = SentenceTransformer("nomic-ai/modernbert-embed-base")
+# Load the model globally but lazily
+model = None
+
+def get_model():
+    global model
+    if model is None:
+        model = SentenceTransformer("nomic-ai/modernbert-embed-base")
+    return model
+
+@app.route('/health')
+def health_check():
+    return jsonify({'status': 'healthy'}), 200
 
 @app.route('/')
 def serve_visualizer():
@@ -24,7 +34,8 @@ def get_embedding():
         return jsonify({'error': 'No text provided'}), 400
     
     try:
-        # Add search_document prefix as in vector_store.py
+        # Load model only when needed
+        model = get_model()
         embedding = model.encode([f"search_document: {text}"])[0].tolist()
         return jsonify({'embedding': embedding})
     except Exception as e:
