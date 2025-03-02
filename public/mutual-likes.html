@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Twitter Mutual Likes</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: #14171a;
+            background-color: #f5f8fa;
+            margin: 0;
+            padding: 0;
+        }
+
+        .header {
+            text-align: center;
+            padding: 40px 20px;
+            background-color: white;
+            border-bottom: 1px solid #e1e8ed;
+            margin-bottom: 20px;
+        }
+
+        .header h1 {
+            margin: 0;
+            color: #14171a;
+            font-size: 2.5em;
+        }
+
+        .header p {
+            color: #657786;
+            margin: 10px 0 0;
+            font-size: 1.1em;
+        }
+
+        .container {
+            display: flex;
+            gap: 30px;
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .timeline {
+            flex: 1;
+            background: white;
+            border: 1px solid #e1e8ed;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .timeline h2 {
+            color: #14171a;
+            font-size: 1.2em;
+            margin-top: 0;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #e1e8ed;
+        }
+
+        .input-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            text-align: center;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            max-width: 600px;
+            margin: 0 auto 30px;
+        }
+
+        input {
+            padding: 10px 15px;
+            margin: 5px;
+            border: 1px solid #e1e8ed;
+            border-radius: 20px;
+            font-size: 1em;
+            width: 200px;
+            transition: border-color 0.2s;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #1da1f2;
+        }
+
+        button {
+            padding: 10px 20px;
+            background-color: #1da1f2;
+            color: white;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 600;
+            transition: background-color 0.2s;
+        }
+
+        button:hover {
+            background-color: #1991db;
+        }
+
+        .thread {
+            margin-bottom: 20px;
+            border: 1px solid #e1e8ed;
+            border-radius: 12px;
+            overflow: hidden;
+            background: white;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .tweet {
+            padding: 15px;
+            transition: background-color 0.2s;
+        }
+
+        .tweet:hover {
+            background-color: #f8f9fa;
+        }
+
+        .thread-reply {
+            border-top: 1px solid #e1e8ed;
+            margin-left: 0;
+            padding-left: 15px;
+            border-left: 2px solid #1da1f2;
+        }
+
+        .tweet-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #657786;
+            font-size: 0.9em;
+            margin-bottom: 5px;
+        }
+
+        .tweet-meta strong {
+            color: #14171a;
+        }
+
+        .thread-indicator {
+            color: #1da1f2;
+            font-size: 0.9em;
+        }
+
+        .tweet-content {
+            white-space: pre-wrap;
+            margin-top: 5px;
+        }
+
+        .tweet-link {
+            margin-left: auto;
+            color: #1da1f2;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            padding: 4px;
+            border-radius: 50%;
+            transition: background-color 0.2s;
+        }
+
+        .tweet-link:hover {
+            background-color: rgba(29, 161, 242, 0.1);
+        }
+
+        .tweet-link svg {
+            width: 18px;
+            height: 18px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #657786;
+            font-style: italic;
+        }
+
+        .placeholder-tweet {
+            color: #657786;
+            font-style: italic;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+        }
+
+        .summary-section {
+            margin-bottom: 20px;
+        }
+
+        .relationship-summary {
+            background: white;
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px solid #e1e8ed;
+            margin-bottom: 20px;
+            font-size: 0.95em;
+            color: #14171a;
+            line-height: 1.5;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .summary-loading {
+            font-style: italic;
+            color: #657786;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
+            }
+            
+            input {
+                width: calc(100% - 40px);
+                margin: 5px 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Twitter Mutual Likes</h1>
+        <p>Discover tweets that connect two Twitter users through likes</p>
+    </div>
+
+    <div class="input-section">
+        <input type="text" id="account1" placeholder="Enter first account" value="defenderofbasic">
+        <input type="text" id="account2" placeholder="Enter second account" value="exgenesis">
+        <button id="fetchButton">Show Mutual Likes</button>
+    </div>
+
+    <div class="container">
+        <div class="timeline">
+            <div id="summary1" class="relationship-summary"></div>
+            <h2>Tweets by <span id="account1-header"></span> liked by <span id="account2-header"></span></h2>
+            <div id="loading1" class="loading"></div>
+            <div id="timeline1"></div>
+        </div>
+        <div class="timeline">
+            <div id="summary2" class="relationship-summary"></div>
+            <h2>Tweets by <span id="account2-header2"></span> liked by <span id="account1-header2"></span></h2>
+            <div id="loading2" class="loading"></div>
+            <div id="timeline2"></div>
+        </div>
+    </div>
+
+    <script>
+        // Helper function to update loading status
+        function setLoading(timelineNum, message) {
+            document.getElementById(`loading${timelineNum}`).textContent = message;
+        }
+
+        // Helper function to format dates
+        function formatDate(dateString) {
+            return new Date(dateString).toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        // Fetch user data from the API
+        async function fetchUserData(username) {
+            try {
+                const response = await fetch(`/api/user-archive/${username.toLowerCase()}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                // Debug the data structure
+                console.log(`Full data structure for ${username}:`, {
+                    tweetCount: data.tweets?.length,
+                    likeCount: data.like?.length,
+                    sampleTweet: data.tweets?.[0],
+                    sampleLike: data.like?.[0]
+                });
+                return data;
+            } catch (error) {
+                console.error(`Error fetching data for ${username}:`, error);
+                return null;
+            }
+        }
+
+        // Display a single tweet
+        function displayTweet(tweet, container, authorUsername) {
+            const tweetData = tweet.tweet || tweet;
+            
+            // Debug what we're actually using
+            console.log('Tweet data:', {
+                authorUsername,  // This will be the actual user's handle
+                createdAt: tweetData.created_at,
+                text: tweetData.full_text
+            });
+            
+            const tweetElement = document.createElement('div');
+            tweetElement.className = 'tweet';
+            
+            tweetElement.innerHTML = `
+                <div class="tweet-meta">
+                    <strong>@${authorUsername}</strong>
+                    <span>· ${formatDate(tweetData.created_at)}</span>
+                </div>
+                <div class="tweet-content">${tweetData.full_text || 'No content available'}</div>
+            `;
+            container.appendChild(tweetElement);
+        }
+
+        // Helper function to build a thread from tweets
+        function buildThread(tweets, tweetId, seenIds = new Set()) {
+            const thread = [];
+            let currentTweetId = tweetId;
+            
+            while (currentTweetId && !seenIds.has(currentTweetId)) {
+                const tweetData = tweets.find(t => t.tweet.id_str === currentTweetId);
+                
+                if (!tweetData) {
+                    thread.push({
+                        isPlaceholder: true,
+                        id_str: currentTweetId,
+                        full_text: "Tweet not in archive"
+                    });
+                    break;
+                }
+                
+                seenIds.add(currentTweetId);
+                thread.push(tweetData.tweet);
+                currentTweetId = tweetData.tweet.in_reply_to_status_id_str;
+            }
+            
+            return thread.reverse(); // Reverse to show oldest first
+        }
+
+        // Group tweets into threads
+        function groupIntoThreads(tweets) {
+            const threads = [];
+            const seenTweetIds = new Set();
+            
+            // Start with tweets that aren't replies (thread starters)
+            const threadStarters = tweets.filter(t => !t.tweet.in_reply_to_status_id_str);
+            threadStarters.forEach(starter => {
+                if (!seenTweetIds.has(starter.tweet.id_str)) {
+                    const thread = buildThread(tweets, starter.tweet.id_str, seenTweetIds);
+                    threads.push(thread);
+                }
+            });
+            
+            // Handle reply tweets that might be middle of threads
+            tweets.forEach(tweetData => {
+                if (!seenTweetIds.has(tweetData.tweet.id_str)) {
+                    const thread = buildThread(tweets, tweetData.tweet.id_str, seenTweetIds);
+                    threads.push(thread);
+                }
+            });
+            
+            // Sort threads by the latest tweet in each thread
+            return threads.sort((a, b) => {
+                const latestA = new Date(a[a.length - 1].created_at);
+                const latestB = new Date(b[b.length - 1].created_at);
+                return latestB - latestA;
+            });
+        }
+
+        // Display a thread of tweets
+        function displayThread(thread, container, authorUsername) {
+            const threadElement = document.createElement('div');
+            threadElement.className = 'thread';
+            
+            thread.forEach((tweet, index) => {
+                const tweetElement = document.createElement('div');
+                tweetElement.className = `tweet ${index > 0 ? 'thread-reply' : ''}`;
+                
+                if (tweet.isPlaceholder) {
+                    tweetElement.innerHTML = `
+                        <div class="tweet-meta">
+                            <span class="placeholder-tweet">Tweet not in archive</span>
+                        </div>
+                    `;
+                } else {
+                    const tweetUrl = `https://twitter.com/${authorUsername}/status/${tweet.id_str}`;
+                    tweetElement.innerHTML = `
+                        <div class="tweet-meta">
+                            <strong>@${authorUsername}</strong>
+                            <span>· ${formatDate(tweet.created_at)}</span>
+                            ${index > 0 ? '<span class="thread-indicator">↳ thread</span>' : ''}
+                            <a href="${tweetUrl}" target="_blank" rel="noopener" class="tweet-link" title="Open tweet">
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <path fill="currentColor" d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                                </svg>
+                            </a>
+                        </div>
+                        <div class="tweet-content">${tweet.full_text || 'No content available'}</div>
+                    `;
+                }
+                
+                threadElement.appendChild(tweetElement);
+            });
+            
+            container.appendChild(threadElement);
+        }
+
+        // Add this function to get summaries
+        async function getRelationshipSummaries(tweetsLikedByUser2, tweetsLikedByUser1, user1, user2) {
+            try {
+                console.log('Sending data to summarize:', {
+                    tweetsCount1: tweetsLikedByUser2.length,
+                    tweetsCount2: tweetsLikedByUser1.length,
+                    user1,
+                    user2
+                });
+
+                const response = await fetch('/api/summarize-relationship', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        tweets1: tweetsLikedByUser2,
+                        tweets2: tweetsLikedByUser1,
+                        user1: user1,
+                        user2: user2
+                    })
+                });
+
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to get summaries');
+                }
+
+                return data;
+            } catch (error) {
+                console.error('Error getting summaries:', error);
+                return {
+                    summary1: `Error generating summary: ${error.message}`,
+                    summary2: `Error generating summary: ${error.message}`
+                };
+            }
+        }
+
+        // Main function to fetch and display mutual likes
+        async function fetchMutualLikes() {
+            const account1 = document.getElementById('account1').value.trim();
+            const account2 = document.getElementById('account2').value.trim();
+
+            // Clear previous results
+            document.getElementById('timeline1').innerHTML = '';
+            document.getElementById('timeline2').innerHTML = '';
+            
+            // Update headers
+            document.getElementById('account1-header').textContent = account1;
+            document.getElementById('account2-header').textContent = account2;
+            document.getElementById('account2-header2').textContent = account2;
+            document.getElementById('account1-header2').textContent = account1;
+
+            // Show loading states
+            setLoading(1, `Fetching data for ${account1}...`);
+            setLoading(2, `Fetching data for ${account2}...`);
+
+            // Fetch both users' data
+            const [user1Data, user2Data] = await Promise.all([
+                fetchUserData(account1),
+                fetchUserData(account2)
+            ]);
+
+            if (!user1Data?.tweets || !user2Data?.tweets) {
+                setLoading(1, 'Error: Could not load user data');
+                setLoading(2, 'Error: Could not load user data');
+                return;
+            }
+
+            setLoading(1, 'Processing likes...');
+            setLoading(2, 'Processing likes...');
+
+            // Create Sets of liked tweet IDs for efficient lookup
+            const user1Likes = new Set((user1Data.like || []).map(like => like.like.tweetId));
+            const user2Likes = new Set((user2Data.like || []).map(like => like.like.tweetId));
+
+            console.log('Like counts:', {
+                user1Likes: user1Likes.size,
+                user2Likes: user2Likes.size
+            });
+
+            // Process tweets for timeline 1 (user1's tweets liked by user2)
+            const timeline1 = document.getElementById('timeline1');
+            const tweetsLikedByUser2 = user1Data.tweets
+                .filter(tweetData => {
+                    // Log the first tweet's structure to debug
+                    if (!window.sampleTweetLogged) {
+                        console.log('Full tweet data structure:', JSON.stringify(tweetData, null, 2));
+                        window.sampleTweetLogged = true;
+                    }
+                    return tweetData && tweetData.tweet && user2Likes.has(tweetData.tweet.id_str);
+                });
+
+            // Process tweets for timeline 2 (user2's tweets liked by user1)
+            const timeline2 = document.getElementById('timeline2');
+            const tweetsLikedByUser1 = user2Data.tweets
+                .filter(tweetData => tweetData && tweetData.tweet && user1Likes.has(tweetData.tweet.id_str));
+
+            // Display results
+            if (tweetsLikedByUser2.length === 0) {
+                setLoading(1, 'No matching tweets found');
+            } else {
+                setLoading(1, `Found ${tweetsLikedByUser2.length} tweets`);
+                const threads = groupIntoThreads(tweetsLikedByUser2);
+                threads.forEach(thread => displayThread(thread, timeline1, account1));
+            }
+
+            if (tweetsLikedByUser1.length === 0) {
+                setLoading(2, 'No matching tweets found');
+            } else {
+                setLoading(2, `Found ${tweetsLikedByUser1.length} tweets`);
+                const threads = groupIntoThreads(tweetsLikedByUser1);
+                threads.forEach(thread => displayThread(thread, timeline2, account2));
+            }
+
+            // After finding mutual likes, get summaries
+            if (tweetsLikedByUser2.length > 0 || tweetsLikedByUser1.length > 0) {
+                const summaries = await getRelationshipSummaries(
+                    tweetsLikedByUser2,
+                    tweetsLikedByUser1,
+                    account1,
+                    account2
+                );
+
+                if (summaries) {
+                    document.getElementById('summary1').innerHTML = summaries.summary1;
+                    document.getElementById('summary2').innerHTML = summaries.summary2;
+                } else {
+                    document.getElementById('summary1').innerHTML = 'Could not generate relationship summary';
+                    document.getElementById('summary2').innerHTML = 'Could not generate relationship summary';
+                }
+            } else {
+                document.getElementById('summary1').innerHTML = 'No mutual interactions found';
+                document.getElementById('summary2').innerHTML = 'No mutual interactions found';
+            }
+        }
+
+        // Add click handler
+        document.getElementById('fetchButton').addEventListener('click', fetchMutualLikes);
+    </script>
+</body>
+</html> 

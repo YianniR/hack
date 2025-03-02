@@ -549,7 +549,26 @@
                     return null;
                 }
 
-                // Update the loadEmbeddings function
+                // Add this helper function
+                function getAverageEmbedding(userData) {
+                    const embeddings = [];
+                    for (const weekData of Object.values(userData)) {
+                        if (weekData?.embedding) {
+                            embeddings.push(weekData.embedding);
+                        }
+                    }
+                    
+                    if (embeddings.length === 0) return null;
+                    
+                    // Calculate average
+                    const sum = embeddings.reduce((acc, curr) => {
+                        return acc.map((val, i) => val + curr[i]);
+                    }, new Array(embeddings[0].length).fill(0));
+                    
+                    return sum.map(val => val / embeddings.length);
+                }
+
+                // Modify loadEmbeddings to use averaged embeddings
                 async function loadEmbeddings() {
                     try {
                         log('Loading embeddings...');
@@ -561,44 +580,21 @@
                         weeklyData = await response.json();
                         log(`Received embeddings file (${response.headers.get('content-length')} bytes)`);
                         
-                        // Collect all unique weeks
-                        allWeeks = new Set();
-                        Object.values(weeklyData).forEach(userData => {
-                            Object.keys(userData).forEach(week => {
-                                if (userData[week]?.embedding) {
-                                    allWeeks.add(week);
-                                }
-                            });
-                        });
-                        allWeeks = Array.from(allWeeks).sort();
-                        currentWeek = allWeeks[allWeeks.length - 1];  // Start with most recent
-                        
-                        // Initialize time slider
-                        initializeTimeSlider();
-
-                        // Convert weekly data to flat structure using latest embeddings
-                        const flattenedEmbeddings = {};
+                        // Convert weekly data to averaged embeddings
+                        const averagedEmbeddings = {};
                         for (const [userId, userData] of Object.entries(weeklyData)) {
-                            const latestEmbedding = getLatestEmbedding(userData);
-                            if (latestEmbedding) {
-                                flattenedEmbeddings[userId] = {
-                                    embedding: latestEmbedding
+                            const avgEmbedding = getAverageEmbedding(userData);
+                            if (avgEmbedding) {
+                                averagedEmbeddings[userId] = {
+                                    embedding: avgEmbedding
                                 };
                             }
                         }
                         
-                        const userCount = Object.keys(flattenedEmbeddings).length;
+                        const userCount = Object.keys(averagedEmbeddings).length;
                         log(`Successfully parsed embeddings for ${userCount} users`);
                         
-                        if (userCount > 0) {
-                            const sampleUserId = Object.keys(flattenedEmbeddings)[0];
-                            log('Sample embedding:', {
-                                userId: sampleUserId,
-                                embeddingLength: flattenedEmbeddings[sampleUserId].embedding.length
-                            });
-                        }
-                        
-                        return flattenedEmbeddings;
+                        return averagedEmbeddings;
                     } catch (error) {
                         log('Error loading embeddings:', error);
                         throw error;
